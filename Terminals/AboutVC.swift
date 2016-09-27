@@ -1,13 +1,18 @@
+//**************************************************************************************
 //
-//  AboutVC.swift
-//  Terminals
+//    Filename: AboutVC.swift
+//     Project: Terminals
 //
-//  Created by Robert Kerr on 5/6/16.
-//  Copyright © 2016 MobileToolworks. All rights reserved.
+//      Author: Robert Kerr 
+//   Copyright: Copyright © 2016 MobileToolworks. All rights reserved.
 //
+//  Maintenance History
+//          5/6/16      File Created
+//          9/26/16     Converted to use CoreData instead of MongoDB/AWS
+//
+//**************************************************************************************
 
 import UIKit
-import Mixpanel
 
 class AboutVC: UIViewController {
 
@@ -15,14 +20,11 @@ class AboutVC: UIViewController {
         super.viewDidLoad()
     }
     
-    override func viewDidAppear(animated: Bool) {
-        let mixpanel = Mixpanel.sharedInstance()
-        mixpanel.track("About Appeared")
-
+    override func viewDidAppear(_ animated: Bool) {
     }
     
-    override func  preferredStatusBarStyle()-> UIStatusBarStyle {
-        return UIStatusBarStyle.LightContent
+    override var  preferredStatusBarStyle: UIStatusBarStyle {
+        return UIStatusBarStyle.lightContent
     }
 
 }

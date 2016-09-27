@@ -1,74 +1,42 @@
+//**************************************************************************************
 //
-//  BrowseMapVC.swift
-//  Terminals
+//    Filename: BrowseMapVC.swift
+//     Project: Terminals
 //
-//  Created by Robert Kerr on 5/2/16.
-//  Copyright © 2016 MobileToolworks. All rights reserved.
+//      Author: Robert Kerr 
+//   Copyright: Copyright © 2016 MobileToolworks. All rights reserved.
 //
+//  Maintenance History
+//          5/2/16      File Created
+//          9/26/16     Converted to use CoreData instead of MongoDB/AWS
+//
+//**************************************************************************************
 
 import UIKit
 import MapKit
-import Alamofire
-import SwiftyJSON
-import Mixpanel
-
-
-struct PinData {
-    var terminalName : String
-    var city : String
-    var country : String?
-    var iata : String?
-    var icao : String?
-    var gmtOffset : Int?
-    var tzCode : String?
-    var tzName : String?
-    var elevation : Int?
-    var pinType : String = "Pin_CivilianAirport"
-    var location : CLLocationCoordinate2D
-    
-    init(terminalName : String, city: String, country : String?, iata : String?, icao : String?, pinType: String?, gmtOffset : Int?, tzCode : String?, tzName : String?, elevation : Int?, coordinates : (Double, Double)) {
-        
-        self.terminalName = terminalName
-        self.city = city
-        self.country = country
-        self.iata = iata
-        self.icao = icao
-        
-        if let p = pinType {
-            if ["BusStation", "RailStation", "MilitaryAirport", "SeaPort"].contains(p) {
-                self.pinType = "Pin_" + p
-            }
-        }
-        
-        self.gmtOffset = gmtOffset
-        self.tzCode = tzCode
-        self.tzName = tzName
-        self.elevation = elevation
-        self.location = CLLocationCoordinate2DMake(coordinates.0, coordinates.1)
-    }
-}
+import CoreData
 
 class BrowseMapVC: UIViewController,  MKMapViewDelegate, CLLocationManagerDelegate, UIAlertViewDelegate {
 
     @IBOutlet weak var mapView: MKMapView!
-    
-    
     @IBOutlet weak var toggleMapTypeButton: UIButton!
-    
-    
     
     var manager: CLLocationManager?
     
     // The center position of the map when displayed
     var centerLat = 0.0
     var centerLon = 0.0
-    var pins: [PinData] = []
+    var pins: [Terminal] = []
     
     var nextRegionChangeFromUser = false
     
-    // If provided, use the lat/lon of this city as the center position of the map
-    var baseUrl = "https://demo.mobiletoolworks.com/terminals/"
-
+    
+    //**************************************************************************************
+    //
+    //      Function: viewDidLoad
+    //   Description: on load, initialize the location manager, set delegate
+    //
+    //**************************************************************************************
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -79,63 +47,71 @@ class BrowseMapVC: UIViewController,  MKMapViewDelegate, CLLocationManagerDelega
         manager?.desiredAccuracy = kCLLocationAccuracyBest
     }
     
-    override func viewDidAppear(animated: Bool) {
+    //**************************************************************************************
+    //
+    //      Function: viewDidAppear
+    //   Description: As form appears, perform a search (if city is specified)
+    //                  if no city search, locate the user so the current lat/lon can be
+    //                  used for the center of the search
+    //
+    //**************************************************************************************
+    override func viewDidAppear(_ animated: Bool) {
         
-        let mixpanel = Mixpanel.sharedInstance()
-        mixpanel.track("Browse Map Appeared")
-
         // Set the correct image based on the current mapType
-        if mapView.mapType == .Standard {
-            toggleMapTypeButton.setImage(UIImage.init(named: "Satellite"), forState: .Normal)
+        if mapView.mapType == .standard {
+            toggleMapTypeButton.setImage(UIImage.init(named: "Satellite"), for: UIControlState())
         } else {
-            toggleMapTypeButton.setImage(UIImage.init(named: "MapFilled"), forState: .Normal)
+            toggleMapTypeButton.setImage(UIImage.init(named: "MapFilled"), for: UIControlState())
         }
 
 
         // If there is a search city, kick off a query for it. Otherwise kick off a query of current Geo Location
-        let appDelegate = UIApplication.sharedApplication().delegate as! AppDelegate
+        let appDelegate = UIApplication.shared.delegate as! AppDelegate
 
         if let city = appDelegate.searchCity {
-
-            // If have a city, use it to search for the list of points
-            let url = self.baseUrl + "searchFromCity"
-            let parameters : [String : AnyObject] = [
-                "distanceMeters" : 100000,
-                "city" : city
-            ]
-            
-            SendQuery(url, parameters: parameters, autoZoom: true)
+            let task = TerminalTasks()
+            pins = task.searchFromCity(city: city, distanceMeters: 100_000)
+            addPins(true)
             
         } else {
-
-            if CLLocationManager.isMonitoringAvailableForClass(CLCircularRegion) {
+            if CLLocationManager.isMonitoringAvailable(for: CLCircularRegion.self) {
                 manager?.requestWhenInUseAuthorization()
                 manager?.startUpdatingLocation()
             }
         }
     }
-
-    func locationManager(manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        
+    
+    
+    //**************************************************************************************
+    //
+    //      Function: didUpdateLocations
+    //   Description: When we get a location update with our level of accuracy, 
+    //                  stop the gps
+    //
+    //**************************************************************************************
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         manager.stopUpdatingLocation()
         
-        // If have a city, use it to search for the list of points
-        let url = self.baseUrl + "searchFromPoint"
-        let parameters : [String : AnyObject] = [
-            "distanceMeters" : 100000,
-            "lat" : locations[0].coordinate.latitude,
-            "lon" : locations[0].coordinate.longitude
-        ]
+        if locations.count > 0 {
+            let loc = locations[0]
         
-        SendQuery(url, parameters: parameters, autoZoom: true)
-        
+            let task = TerminalTasks()
+            pins = task.searchFromLatLon(fromLat: loc.coordinate.latitude, fromLon: loc.coordinate.longitude, distanceMeters: 100_000)
+            addPins(true)
+        }
     }
 
-    func mapView(mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+    //**************************************************************************************
+    //
+    //      Function: regionWillChangeAnimated
+    //   Description: As the user pans around, update the query and the map
+    //
+    //**************************************************************************************
+    func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
         let view = mapView.subviews.first
         
         for recognizer in (view?.gestureRecognizers)! {
-            if recognizer.state == .Began || recognizer.state == .Ended {
+            if recognizer.state == .began || recognizer.state == .ended {
                 self.nextRegionChangeFromUser = true
                 break
             }
@@ -143,48 +119,73 @@ class BrowseMapVC: UIViewController,  MKMapViewDelegate, CLLocationManagerDelega
     }
     
     
-    @IBAction func toggleMapTypeTapped(sender: UIButton) {
+    //**************************************************************************************
+    //
+    //      Function: toggleMapTypeTapped
+    //   Description: User has decided to toggle the map
+    //
+    //**************************************************************************************
+    @IBAction func toggleMapTypeTapped(_ sender: UIButton) {
         
-        if mapView.mapType == .Standard {
-            toggleMapTypeButton.setImage(UIImage.init(named: "MapFilled"), forState: .Normal)
-            mapView.mapType = .Hybrid
+        if mapView.mapType == .standard {
+            toggleMapTypeButton.setImage(UIImage.init(named: "MapFilled"), for: UIControlState())
+            mapView.mapType = .hybrid
         } else {
-            toggleMapTypeButton.setImage(UIImage.init(named: "Satellite"), forState: .Normal)
-            mapView.mapType = .Standard
+            toggleMapTypeButton.setImage(UIImage.init(named: "Satellite"), for: UIControlState())
+            mapView.mapType = .standard
         }
     }
     
-    @IBAction func CenterMapOnMeTapped(sender: UIButton) {
-        if CLLocationManager.authorizationStatus() != .AuthorizedWhenInUse {
+    //**************************************************************************************
+    //
+    //      Function: CenterMapOnMeTapped
+    //   Description: Center the map on the user's current location
+    //
+    //**************************************************************************************
+    @IBAction func CenterMapOnMeTapped(_ sender: UIButton) {
+        if CLLocationManager.authorizationStatus() != .authorizedWhenInUse {
             showLocationAcessDeniedAlert()
         } else {
-            if CLLocationManager.isMonitoringAvailableForClass(CLCircularRegion) {
+            if CLLocationManager.isMonitoringAvailable(for: CLCircularRegion.self) {
                 manager?.requestWhenInUseAuthorization()
                 manager?.startUpdatingLocation()
             }
         }
     }
 
+    //**************************************************************************************
+    //
+    //      Function: showLocationAcessDeniedAlert
+    //   Description: If the app has been denied by the user, show an error message
+    //
+    //**************************************************************************************
     func showLocationAcessDeniedAlert() {
         let alertController = UIAlertController(title: "Location Permission",
                                                 message: "Permission to determine your current location was not authorized. Please enable it in Settings to continue.",
-                                                preferredStyle: .Alert)
+                                                preferredStyle: .alert)
         
-        let settingsAction = UIAlertAction(title: "Settings", style: .Default) { (alertAction) in
+        let settingsAction = UIAlertAction(title: "Settings", style: .default) { (alertAction) in
             
-            if let appSettings = NSURL(string: UIApplicationOpenSettingsURLString) {
-                UIApplication.sharedApplication().openURL(appSettings)
+            if let appSettings = URL(string: UIApplicationOpenSettingsURLString) {
+                UIApplication.shared.open(appSettings, options: [:], completionHandler: nil)
+ 
             }
         }
         alertController.addAction(settingsAction)
         
-        let cancelAction = UIAlertAction(title: "Cancel", style: .Cancel, handler: nil)
+        let cancelAction = UIAlertAction(title: "Cancel", style: .cancel, handler: nil)
         alertController.addAction(cancelAction)
         
-        presentViewController(alertController, animated: true, completion: nil)
+        present(alertController, animated: true, completion: nil)
     }
     
-    func mapView(mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+    //**************************************************************************************
+    //
+    //      Function: regionDidChangeAnimated
+    //   Description: When the region has changed, requery the nearby data locations
+    //
+    //**************************************************************************************
+    func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
 
         if self.nextRegionChangeFromUser {
             self.nextRegionChangeFromUser = false
@@ -198,8 +199,8 @@ class BrowseMapVC: UIViewController,  MKMapViewDelegate, CLLocationManagerDelega
             let loc3 = CLLocation(latitude: center.latitude, longitude: center.longitude - span.longitudeDelta * 0.5)
             let loc4 = CLLocation(latitude: center.latitude, longitude: center.longitude + span.longitudeDelta * 0.5)
             
-            let metersInLatitude = loc1.distanceFromLocation(loc2)
-            let metersInLongitude = loc3.distanceFromLocation(loc4)
+            let metersInLatitude = loc1.distance(from: loc2)
+            let metersInLongitude = loc3.distance(from: loc4)
             
             // Pick out the shortest of lat and lon dimensions
             var distanceInMeters = metersInLongitude / 2.0
@@ -209,132 +210,52 @@ class BrowseMapVC: UIViewController,  MKMapViewDelegate, CLLocationManagerDelega
             }
             
             if distanceInMeters < 500000 {
-                // Build the request paramters
-                var url = self.baseUrl
-                var parameters : [String : AnyObject] = [
-                    "distanceMeters" : distanceInMeters
-                ]
-                
-                url.appendContentsOf("searchFromPoint")
-                parameters["lat"] = center.latitude;
-                parameters["lon"] = center.longitude;
-                
-                SendQuery(url, parameters: parameters, autoZoom: false)
+                let task = TerminalTasks()
+                pins = task.searchFromLatLon(fromLat: center.latitude, fromLon: center.longitude, distanceMeters: 100_000)
+                addPins(true)
             }
         }
         
     }
     
-    /**************************************************
-     
-     Send query to web service and process results
-     
-     **************************************************/
-    func SendQuery(url : String, parameters : [String : AnyObject], autoZoom : Bool) {
-    
-        self.pins.removeAll()
 
-        // always sending JSON
-        let headers : [String : String] = [
-            "Content-Type": "application/json"
-        ]
-        
-        let mixpanel = Mixpanel.sharedInstance()
-        mixpanel.timeEvent("pinQuery")
-
-        
-        Alamofire.request(.POST, url, headers: headers, parameters: parameters, encoding: .JSON)
-            .responseJSON { response in
-                
-                mixpanel.track("pinQuery")
-            
-                if response.result.isFailure {
-                    
-                    if response.result.error?.code != 3840 {
-                        let alertController = UIAlertController(title: "Network Error",
-                            message: response.result.error?.localizedDescription, preferredStyle: .Alert)
-                        
-                        let OKAction = UIAlertAction(title: "OK", style: .Default) { (action:UIAlertAction!) in
-                        }
-                        alertController.addAction(OKAction)
-                        
-                        self.presentViewController(alertController, animated: true, completion:nil)
-                    }
-                } else {
-                    
-                    if let statusCode = response.response?.statusCode {
-                        
-                        if statusCode != 200 {
-                            var errorMessage = "Error \(statusCode)"
-                            
-                            if let dict = response.result.value as? [String:AnyObject], msg = dict["Message"] as? String {
-                                errorMessage = "Error \(statusCode): \(msg)"
-                            }
-                            
-                            let alertController = UIAlertController(title: "Network Error",
-                                message: errorMessage, preferredStyle: .Alert)
-                            
-                            let OKAction = UIAlertAction(title: "OK", style: .Default) { (action:UIAlertAction!) in
-                            }
-                            alertController.addAction(OKAction)
-                            
-                            self.presentViewController(alertController, animated: true, completion:nil)
-                            
-                        } else {
-                            
-                            if let responseJson = response.result.value {
-                                let json = JSON(responseJson)
-                                
-                                if let jsonArray = json.array {
-                                    for terminal in jsonArray {
-                                        
-                                        let longitude = terminal["location"]["coordinates"][0].doubleValue
-                                        let latitude = terminal["location"]["coordinates"][1].doubleValue
-                                        
-                                        if self.validLon(longitude) && self.validLat(latitude) {
-                                            
-                                            let pin = PinData(
-                                                terminalName: terminal["terminalName"].stringValue,
-                                                city: terminal["city"].stringValue,
-                                                country: terminal["country"].stringValue,
-                                                iata: terminal["iata"].stringValue,
-                                                icao: terminal["icao"].stringValue,
-                                                pinType: terminal["pinType"].stringValue,
-                                                gmtOffset: terminal["gmtOffset"].intValue,
-                                                tzCode: terminal["tzCode"].stringValue,
-                                                tzName: terminal["tzName"].stringValue,
-                                                elevation: terminal["elevation"].intValue,
-                                                coordinates: (latitude, longitude))
-                                            
-                                            self.pins.append(pin)
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            self.addPins(autoZoom)
-                        }
-                    }
-                }
-        }
-    }
-
-    func addPins(autoZoom : Bool) {
+    //**************************************************************************************
+    //
+    //      Function: addPins
+    //   Description: Called internally to add the current set of pins to the map
+    //
+    //**************************************************************************************
+    func addPins(_ autoZoom : Bool) {
         
         // remove all annotations currently dropped
-        dispatch_async(dispatch_get_main_queue(), { () -> Void in
+        DispatchQueue.main.async(execute: { () -> Void in
             self.mapView.removeAnnotations(self.mapView.annotations)
         })
         
         // re-add annotations
         for pin in pins {
             
-            // Todo: Determine which pin image to use
-            let iconName = pin.pinType
+            let name = pin.name ?? "Unknown"
+            let city = pin.city ?? "Unknown"
+            var iconName = ""
             
-            let annotation = CustomAnnotation(coordinate: pin.location, title: pin.terminalName, subtitle: pin.city, iconName: iconName)
+            // Build the icon name based on the data value
+            if let pinType = pin.pinType {
+                iconName = "Pin_\(pinType)"
+            }
             
-            dispatch_async(dispatch_get_main_queue(), { () -> Void in
+            // If the build icon name is invalid, just assign a civilian airport icon to it
+            if !["Pin_CivilianAirport", "Pin_SeaPort", "Pin_BusStation", "Pin_RailStation", "Pin_MilitaryAirport"].contains(iconName) {
+                iconName = "Pin_CivilianAirport"
+            }
+            
+            // Create the annotation, add to the map
+            let annotation = CustomAnnotation(coordinate: CLLocationCoordinate2DMake(pin.lat, pin.lon),
+                                              title: name,
+                                              subtitle: city,
+                                              iconName: iconName)
+            
+            DispatchQueue.main.async(execute: { () -> Void in
                 self.mapView.addAnnotation(annotation)
             })
         }
@@ -346,14 +267,14 @@ class BrowseMapVC: UIViewController,  MKMapViewDelegate, CLLocationManagerDelega
     }
     
     // helpers to avoid trying to add pins for invalid coordinates
-    func validLat(lat : Double) -> Bool {
+    func validLat(_ lat : Double) -> Bool {
         if lat >= -90.0 && lat <= 90.0 {
             return true
         }
         
         return false
     }
-    func validLon(lat : Double) -> Bool {
+    func validLon(_ lat : Double) -> Bool {
         if lat >= -180.0 && lat <= 180.0 {
             return true
         }
@@ -361,7 +282,13 @@ class BrowseMapVC: UIViewController,  MKMapViewDelegate, CLLocationManagerDelega
         return false
     }
     
-    func zoomMapViewToFitAnnotations(animated: Bool) {
+    //**************************************************************************************
+    //
+    //      Function: zoomMapViewToFitAnnotations
+    //   Description: Zoom the map bounding box to fit the annotations
+    //
+    //**************************************************************************************
+    func zoomMapViewToFitAnnotations(_ animated: Bool) {
         let MINIMUM_ZOOM_ARC = 0.014 //approximately 1 miles (1 degree of arc ~= 69 miles)
         let ANNOTATION_REGION_PAD_FACTOR = 1.15
         let MAX_DEGREES_ARC = 360.0
@@ -377,8 +304,10 @@ class BrowseMapVC: UIViewController,  MKMapViewDelegate, CLLocationManagerDelega
         var points = [CLLocationCoordinate2D]()
         
         for pin in self.pins {
-            if validLat(pin.location.latitude) && validLon(pin.location.longitude) {
-                points.append(pin.location)
+            
+            
+            if validLat(pin.lat) && validLon(pin.lon) {
+                points.append(CLLocationCoordinate2DMake(pin.lat, pin.lon))
             }
         }
         
@@ -390,7 +319,7 @@ class BrowseMapVC: UIViewController,  MKMapViewDelegate, CLLocationManagerDelega
             let region = MKCoordinateRegionMakeWithDistance(points[0], 10000, 10000)
             
             // dispatch update of view on UI thread
-            dispatch_async(dispatch_get_main_queue(), { () -> Void in
+            DispatchQueue.main.async(execute: { () -> Void in
                 self.mapView.setRegion(region, animated: animated)
             })
         } else {
@@ -420,38 +349,50 @@ class BrowseMapVC: UIViewController,  MKMapViewDelegate, CLLocationManagerDelega
             }
             
             // dispatch update of view on UI thread
-            dispatch_async(dispatch_get_main_queue(), { () -> Void in
+            DispatchQueue.main.async(execute: { () -> Void in
                 self.mapView.setRegion(region, animated: animated)
             })
         }
     }
     
     
-    func mapView(mapView: MKMapView, viewForAnnotation annotation: MKAnnotation) -> MKAnnotationView? {
+    //**************************************************************************************
+    //
+    //      Function: viewFor annotation
+    //   Description: Returns a view appropriate for the given annotation
+    //
+    //**************************************************************************************
+    func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
         
         // Below condition is for custom annotation
         if (annotation is CustomAnnotation) {
             let customAnnotation = annotation as? CustomAnnotation
             
             if let reuseId = customAnnotation?.iconName {
-                var av = mapView.dequeueReusableAnnotationViewWithIdentifier(reuseId) as MKAnnotationView!
+                var av = mapView.dequeueReusableAnnotationView(withIdentifier: reuseId) as MKAnnotationView!
                 
                 if (av == nil) {
                     av = MKAnnotationView(annotation: annotation, reuseIdentifier: reuseId)
-                    av.image = UIImage(named: customAnnotation!.iconName)
-                    av.canShowCallout = true
+                    av?.image = UIImage(named: customAnnotation!.iconName)
+                    av?.canShowCallout = true
                 } else {
-                    av.annotation = annotation;
+                    av?.annotation = annotation;
                 }
                 
-                self.addBounceAnimationToView(av)
+                self.addBounceAnimationToView(av!)
                 return av
             }
         }
         return nil
     }
     
-    func addBounceAnimationToView(view: UIView) {
+    //**************************************************************************************
+    //
+    //      Function: addBounceAnimationToView
+    //   Description: Adds a bounce animation as a pin is dropped
+    //
+    //**************************************************************************************
+    func addBounceAnimationToView(_ view: UIView) {
         let bounceAnimation = CAKeyframeAnimation(keyPath: "transform.scale") as CAKeyframeAnimation
         bounceAnimation.values = [ 0.05, 1.1, 0.9, 1]
         
@@ -461,14 +402,9 @@ class BrowseMapVC: UIViewController,  MKMapViewDelegate, CLLocationManagerDelega
             timingFunctions.append(CAMediaTimingFunction(name: kCAMediaTimingFunctionEaseInEaseOut))
         }
         bounceAnimation.timingFunctions = timingFunctions
-        bounceAnimation.removedOnCompletion = false
+        bounceAnimation.isRemovedOnCompletion = false
         
-        view.layer.addAnimation(bounceAnimation, forKey: "bounce")
-    }
-    
-
-    override func didReceiveMemoryWarning() {
-        super.didReceiveMemoryWarning()
+        view.layer.add(bounceAnimation, forKey: "bounce")
     }
 
 }
